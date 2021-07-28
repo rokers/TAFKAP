@@ -17,14 +17,6 @@ function [est, unc, liks, hypers] = TAFKAP_Decode(samples, p)
 %     of variables that you measured. Similarly, rows do not have to be
 %     trials, but could be any set of measurements that you took of your
 %     voxels or other variables. 
-%
-%     Whatever the nature of the data in 'samples', note that if you are
-%     using the "prev_C" option, the data MUST be in chronological order,
-%     e.g. with consecutive rows corresponding to consecutive trials or
-%     blocks, and without skips (other than breaks between runs). In
-%     general, we advise you to think carefully about whether this option
-%     makes sense for your data. If prev_C is not switched on, then the
-%     order of the rows in 'samples' does not matter.
 % 
 %     The second input, 'p', is a struct that allows you to customize        
 %     certain settings that influence how the algorithm runs. These
@@ -33,49 +25,18 @@ function [est, unc, liks, hypers] = TAFKAP_Decode(samples, p)
 %     for your data, namely a list of stimulus values ('stimval'), a list
 %     of "run numbers" ('runNs') and two lists of binary indicator
 %     variables ('train_trials' and 'test_trials'), that tell the code 
-%     which trials to use for training, and which to use for testing. 
-%
-%     TAFKAP_Decode currently accepts two types of stimulus variable:
-%     circular or categorical. This can be specified in p.stim_type, for
-%     which the default is 'circular'.
-%
-%     If p.stim_type=='circular', then the values in p.stim_val must be
-%     circular and lie in the range of [0, 180]. For instance, they could 
-%     be the orientation of a visual stimulus, measured in degrees. 
-%     However, it could also be (for instance) a color value or direction 
-%     of motion - as long as these values are rescaled to [0, 180] (just 
-%     take care, in that case, to transform the decoder outputs back to 
-%     their original scale, e.g. [0, 360] or [0, 2*pi]. For circular
-%     stimulus variables, TAFKAP will compute the circular standard
-%     deviation as its measure of uncertainty in a decoded distribution,
-%     and the circular mean of the distribution as its estimate of the
-%     stimulus.
-%
-%     If p.stim_type=='categorical', then the values in p.stim_val must be
-%     integers corresponding to category labels. You can use any set of
-%     integers you want - they need not be consecutive, or positive, or
-%     start at 1, etc.. The code will automatically determine the classes
-%     that are present in p.stim_val, as classes = unique(p.stim_val).
-%     The decoded likelihoods will then consists of M values (where M is
-%     the number of classes), that correspond to your classes in ascending
-%     order of their integer labels. For categorical stimulus variables, 
-%     TAFKAP will compute the entropy of the decoded distribution as its
-%     measure of uncertainty. The estimated stimulus will be the class that
-%     with the highest probability.
-%
-%     Note that even continuous quantities such as orientation or color may
-%     sometimes be better treated as categorical - for instance if only a
-%     small number of stimulus values are presented. As an example, if only
-%     four different colors are presented in an experiment, then it does
-%     not make sense to fit continuous tuning functions to this data, as
-%     the data provides no information about the expected response to
-%     intermediate colors. In such a scenario, it also does not make sense
-%     to decode, on a test trial, the probabilities of intermediate
-%     stimulus values, which the generative model has no actual information 
-%     about. The probabilities returned for such intermediate stimulus
-%     values will almost certainly be meaningless.
-%
-%     The indices in 'runNs' can correspond to the indices of the fMRI runs
+%     which trials to use for training, and which to use for testing. The
+%     stimulus values in 'stimval' must be circular and in the range of 
+%     [0, 180]. For instance, it could be the orientation of a visual
+%     stimulus, measured in degrees. However, it could also be (for
+%     instance) a color value or direction of motion - as long as these
+%     values are rescaled to [0, 180] (just take care, in that case, to
+%     transform the decoder outputs back to their original scale, e.g. [0, 360]
+%     or [0, 2*pi]. Non-circular or discrete values aren't implemented
+%     here, but the code could be easily adapted for these cases, by 
+%     altering the basis functions (defined in fun_basis.m) that are used 
+%     to fit tuning functions to voxels (or other response variables). The
+%     indices in 'runNs' can correspond to the indices of the fMRI runs
 %     from which each trial was taken. More broadly, they serve as indices
 %     to set up an inner cross-validation loop within the training data, to
 %     find the best hyperparameters for the TAFKAP algorithm (for PRINCE, 
@@ -131,14 +92,13 @@ if nargin < 1, samples = []; end
 
 defaults = { %Default settings for parameters in 'p'    
     'Nboot', 5e4; %Maximum number of bootstrap iterations 
-    'precomp_C', 4; %How many sets of channel basis functions to use (swap between at random) - for PRINCE, and for categorical stimulus values, this value is irrelevant
+    'precomp_C', 4; %How many sets of channel basis functions to use (swap between at random) - for PRINCE, this value is irrelevant
     'randseed', 1234; %The seed for the (pseudo-)random number generator, which allows the algorithm to reproduce identical results whenever it's run with the same input, despite being stochastic. 
     'prev_C', false; %Regress out contribution of previous stimulus to current-trial voxel responses?        
     'dec_type', 'TAFKAP'; % 'TAFKAP' or 'PRINCE'            
-    'stim_type', 'circular'; %'circular' or 'categorical'.     
     'DJS_tol', 1e-8; %If the Jensen-Shannon Divergence between the new likelihoods and the previous values is smaller than this number, we stop collecting bootstrap samples (before the maximum of Nboot is reached). If you don't want to allow this early termination, you can set this parameter to a negative value.
-    'nchan', 8; %Number of "channels" i.e. orientation basis functions used to fit voxel tuning curves - for categorical stimulus values, this value is irrelevant
-    'chan_exp', 5; %Exponent to which basis functions are raised (higher = narrower) - for categorical stimulus values, this value is irrelevant
+    'nchan', 8; %Number of "channels" i.e. orientation basis functions used to fit voxel tuning curves
+    'chan_exp', 5; %Exponent to which basis functions are raised (higher = narrower)
     };
 p = setdefaults(defaults, p);
 
@@ -149,19 +109,14 @@ if isempty(samples)
     Ntraintrials = 200;
     Ntesttrials = 20;
     Ntrials = Ntraintrials+Ntesttrials;
-    sim_stim_type = 'categorical'; %Change this value to 'circular' or 'categorical' to simulate different possible stimulus variable types
-    nclasses = 4; %Only relevant when simulating categorical stimuli
-    
     
     [samples, sp] = makeSNCData(struct('nvox', 500, 'ntrials', Ntrials, 'taumean', 0.7, 'ntrials_per_run', Ntesttrials, ...
-        'Wstd', 0.3, 'sigma', 0.3, 'randseed', p.randseed, 'shuffle_oris', 1, 'sim_stim_type', sim_stim_type, 'nclasses', nclasses));    
+        'Wstd', 0.3, 'sigma', 0.3, 'randseed', p.randseed, 'shuffle_oris', 1));    
     
     
     p.train_trials = (1:Ntrials)'<= Ntraintrials;
     p.test_trials = ~p.train_trials;
-    p.stim_type = sim_stim_type;    
-    p.stimval = sp.stimval; 
-    if strcmp(sim_stim_type, 'circular'), p.stimval = p.stimval/pi*90; end
+    p.stimval = sp.ori/pi*90;    
     p.runNs = sp.run_idx;    
 end
 
@@ -179,8 +134,7 @@ test_samples = samples(p.test_trials,:);
 Ntraintrials = size(train_samples,1);
 Ntesttrials = size(test_samples,1);
 Nvox = size(train_samples,2);
-train_stimval = p.stimval(p.train_trials);
-if strcmp(p.stim_type, 'circular'), train_stimval = train_stimval/90*pi; end
+train_ori = p.stimval(p.train_trials)/90*pi;
 
 clear samples
 
@@ -191,34 +145,17 @@ clear samples
 % spaced values (this value is hardcoded but can be changed as desired).
 % This allows us to precompute the channel responses (basis function
 % values) for these 100 stimulus values (orientations). 
-%
-% For categorical stimulus variables, likelihoods are discrete by
-% definition, and evaluated only for the M classes that the data belong to.
 
-switch p.stim_type
-    case 'circular'
-        s_precomp = linspace(0, 2*pi, 101)'; s_precomp(end) = [];        
-        ph = linspace(0, 2*pi/p.nchan, p.precomp_C+1);      
-        classes = [];
-    case 'categorical'         
-        classes = unique(p.stimval);
-        assert(all(classes==round(classes)), 'Class labels must be integers');
-        Nclasses = length(classes);        
-        p.nchan = Nclasses;        
-        ph = 0;
-        p.precomp_C=1;
-        s_precomp = classes';
-end
-
-
+s_precomp = linspace(0, 2*pi, 101)'; s_precomp(end) = [];
 C_precomp = nan(length(s_precomp), p.nchan, p.precomp_C);
 Ctrain = nan(Ntraintrials, p.nchan, p.precomp_C);    
-for i = 1:p.precomp_C
-    C_precomp(:,:,i) = fun_basis(s_precomp-ph(i), p.nchan, p.chan_exp, classes);            
-    Ctrain(:,:,i) = fun_basis(train_stimval-ph(i), p.nchan, p.chan_exp, classes);
-end
-      
+ph = linspace(0, 2*pi/p.nchan, p.precomp_C+1); 
 
+pc_idx = 1;
+for i = 1:p.precomp_C
+    C_precomp(:,:,i) = fun_basis(s_precomp-ph(i), p.nchan, p.chan_exp);            
+    Ctrain(:,:,i) = fun_basis(train_ori-ph(i), p.nchan, p.chan_exp);
+end
 Ctest = nan(Ntesttrials, p.nchan, p.precomp_C);
 if p.prev_C
     Ctrain_prev = vertcat(nan(1,p.nchan, p.precomp_C), Ctrain(1:end-1,:,:));
@@ -230,16 +167,15 @@ if p.prev_C
     sr_test = test_runNs == vertcat(nan, test_runNs(1:end-1));    
 
     
-    test_stimval = p.stimval(p.test_trials);
-    if strcmp(p.stim_type, 'circular'), test_stimval = test_stimval/90*pi; end
+    test_ori = p.stimval(p.test_trials)/90*pi;
     for i = 1:p.precomp_C
-        Ctest(:,:,i) = fun_basis(test_stimval-ph(i), p.nchan, p.chan_exp, classes);        
+        Ctest(:,:,i) = fun_basis(test_ori-ph(i), p.nchan, p.chan_exp);        
     end
     Ctest_prev = vertcat(nan(1,p.nchan,p.precomp_C), Ctest(1:end-1,:,:));
     Ctest_prev(~sr_test,:,:) = 0; 
 end
 
-cnt = zeros(Ntesttrials,length(s_precomp));
+cnt = zeros(Ntesttrials,100);
 
 %% Find best hyperparameter values (using inner CV-loop within the training data)
 if strcmpi(p.dec_type, 'TAFKAP')
@@ -341,18 +277,9 @@ end
 fprintf \n
 
 liks = bsxfun(@rdivide, cnt, sum(cnt,2)); %(Normalized) likelihoods (= posteriors, assuming a flat prior)
-switch p.stim_type
-    case 'circular'
-        pop_vec = liks*exp(1i*s_precomp); 
-        est = mod(angle(pop_vec)/pi*90, 180); %Stimulus estimate (likelihood/posterior means)
-        unc = sqrt(-2*log(abs(pop_vec)))/pi*90; %Uncertainty (defined here as circular SDs of likelihoods/posteriors)
-    case 'categorical'
-        [~, est] = max(liks, [], 2);
-        est = classes(est); %Convert back to original class labels
-        tmp = -liks.*log(liks);
-        tmp(liks==0) = 0;
-        unc = sum(tmp,2); %Uncertainty (defined as the entropy of the distribution)
-end
+pop_vec = liks*exp(1i*s_precomp); 
+est = mod(angle(pop_vec)/pi*90, 180); %Stimulus estimate (likelihood/posterior means)
+unc = sqrt(-2*log(abs(pop_vec)))/pi*90; %Uncertainty (defined here as circular SDs of likelihoods/posteriors)
     
     function [minll, minder] = fun_negLL_norm(params)        
         if nargout > 1
@@ -590,16 +517,6 @@ end
         target(eye(pp)==1)=target_diag;
 
         C = (1-lambda)*samp_cov + lambda*target;
-        
-        [~, pp] = chol(C);
-        if pp>0                
-            [evec, eval] = eig(C); 
-            eval = diag(eval);    
-            min_eval = min(eval);
-            eval = max(eval,1e-10);
-            C = evec*diag(eval)/evec;    
-            fprintf('\nWARNING: Non-positive definite covariance matrix detected. Lowest eigenvalue: %3.2g. Finding a nearby PD matrix by thresholding eigenvalues at 1e-10.\n', min_eval);
-        end
     end
     
 

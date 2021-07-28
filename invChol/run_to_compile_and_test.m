@@ -13,7 +13,7 @@
 % Compile the MEX file.
 clc;
 disp('Compiling invChol_mex.c...');
-if strcmpi(computer, 'PCWIN64') || strcmpi(computer, 'GLNXA64')
+if strcmpi(computer, 'PCWIN64') || strcmpi(computer, 'GLNXA64') || strcmpi(computer, 'MACI64')
     disp('64-bit detected, compiling with -largeArrayDims flag...');
     mex invChol_mex.c -lmwlapack -largeArrayDims;
 else
